@@ -1,0 +1,17 @@
+[agent]
+log_level = "trace"
+
+[identity]
+node_uuid = "27e3ac02-af39-46af-995c-9940e18b0cce"
+group = "generic"
+throttle_permille = "990"
+
+[cincinnati]
+url = "http://localhost:6789"
+
+[finalize]
+# Valid strategies: immediate / never / periodic / remote_http
+strategy = "remote_http"
+
+[finalize.remote_http]
+url = "http://localhost:7890"
