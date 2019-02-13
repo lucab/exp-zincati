@@ -92,7 +92,7 @@ impl Handler<TriggerFinalize> for Finalizer {
         };
 
         // Check if finalization is allowed at this time.
-        let green_light = self.strategy.clone().finalize(self.identity.clone().into());
+        let green_light = self.strategy.clone().has_green_light(self.identity.clone());
 
         // Try to finalize.
         let finalize = green_light.and_then(move |ok| {

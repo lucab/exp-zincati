@@ -1,4 +1,5 @@
 use crate::config;
+use crate::identity;
 use failure::{Error, Fallible};
 use futures::prelude::*;
 
@@ -12,7 +13,7 @@ mod periodic;
 pub(crate) use periodic::StratPeriodic;
 
 mod remote_http;
-pub(crate) use remote_http::{HttpParams, StratRemoteHTTP};
+pub(crate) use remote_http::StratRemoteHTTP;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) enum FinStrategy {
@@ -23,9 +24,13 @@ pub(crate) enum FinStrategy {
 }
 
 impl FinStrategy {
-    pub(crate) fn finalize(self, params: HttpParams) -> Box<Future<Item = bool, Error = Error>> {
+    /// Check if finalization is allowed at this time.
+    pub(crate) fn has_green_light(
+        self,
+        identity: identity::Identity,
+    ) -> Box<Future<Item = bool, Error = Error>> {
         match self {
-            FinStrategy::Http(h) => h.finalize(params),
+            FinStrategy::Http(h) => h.has_green_light(identity.into()),
             FinStrategy::Immediate(i) => i.finalize(),
             FinStrategy::Never(n) => n.finalize(),
             FinStrategy::Periodic(p) => p.finalize(),

@@ -26,17 +26,17 @@ extern crate dbus;
 extern crate dbus_tokio;
 extern crate serde_json;
 extern crate structopt;
-extern crate uuid;
 extern crate url_serde;
+extern crate uuid;
 
 mod cincinnati;
-mod identity;
 mod config;
-mod sync_dbus;
 mod finalize;
-mod runtime_state;
+mod identity;
 mod rpm_ostree;
+mod runtime_state;
 mod strategy;
+mod sync_dbus;
 
 use crate::cincinnati::CincinnatiScanner;
 use crate::finalize::Finalizer;
