@@ -17,8 +17,9 @@ lazy_static! {
 
 pub(crate) fn configure(strategy: strategy::FinStrategy, identity: Identity) -> Fallible<()> {
     let finalizer = Finalizer {
-        pending: None,
         identity,
+        pending: None,
+        steady: false,
         strategy,
     };
     let mut static_cfg = CONFIGURED.try_write().unwrap();
@@ -28,8 +29,9 @@ pub(crate) fn configure(strategy: strategy::FinStrategy, identity: Identity) -> 
 
 #[derive(Clone, Debug)]
 pub struct Finalizer {
-    pending: Option<libcincinnati::Release>,
     identity: Identity,
+    pending: Option<libcincinnati::Release>,
+    steady: bool,
     strategy: strategy::FinStrategy,
 }
 
@@ -44,10 +46,13 @@ impl Actor for Finalizer {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        if let strategy::FinStrategy::Http(_) = self.strategy {
-            // TODO(lucab): run_interval to report steady state.
-        }
+        // Try to report steady state.
+        ctx.notify(ReportSteadyState {});
+        ctx.run_interval(time::Duration::from_secs(20), |_act, ctx| {
+            ctx.notify(ReportSteadyState {})
+        });
 
+        // Check for pending updates to finalize.
         ctx.run_interval(time::Duration::from_secs(20), |_act, ctx| {
             ctx.notify(TriggerFinalize {})
         });
@@ -76,6 +81,35 @@ impl Handler<NewPending> for Finalizer {
     }
 }
 
+pub(crate) struct ReportSteadyState {}
+
+impl Message for ReportSteadyState {
+    type Result = Result<(), Error>;
+}
+
+impl Handler<ReportSteadyState> for Finalizer {
+    type Result = ResponseActFuture<Self, (), Error>;
+
+    fn handle(&mut self, _msg: ReportSteadyState, _ctx: &mut Self::Context) -> Self::Result {
+        // Nothing to do if steady state was already confirmed previously.
+        if self.steady {
+            return Box::new(actix::fut::ok(()));
+        }
+
+        // Try to report steady state.
+        let report_steady = self.strategy.clone().report_steady(self.identity.clone());
+        let steady_state =
+            actix::fut::wrap_future::<_, Self>(report_steady).map(|is_ok, actor, _ctx| {
+                if is_ok {
+                    info!("steady state confirmed");
+                    actor.steady = true;
+                }
+            });
+
+        Box::new(steady_state)
+    }
+}
+
 pub(crate) struct TriggerFinalize {}
 
 impl Message for TriggerFinalize {
@@ -90,6 +124,11 @@ impl Handler<TriggerFinalize> for Finalizer {
             Some(r) => r,
             None => return Box::new(future::ok(())),
         };
+
+        if !self.steady {
+            warn!("steady state not yet reached, unable to finalize pending update");
+            return Box::new(future::ok(()));
+        }
 
         // Check if finalization is allowed at this time.
         let green_light = self.strategy.clone().has_green_light(self.identity.clone());

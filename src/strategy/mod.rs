@@ -24,19 +24,6 @@ pub(crate) enum FinStrategy {
 }
 
 impl FinStrategy {
-    /// Check if finalization is allowed at this time.
-    pub(crate) fn has_green_light(
-        self,
-        identity: identity::Identity,
-    ) -> Box<Future<Item = bool, Error = Error>> {
-        match self {
-            FinStrategy::Http(h) => h.has_green_light(identity.into()),
-            FinStrategy::Immediate(i) => i.finalize(),
-            FinStrategy::Never(n) => n.finalize(),
-            FinStrategy::Periodic(p) => p.finalize(),
-        }
-    }
-
     pub(crate) fn try_from_config(cfg: config::FinalizeConfig) -> Fallible<Self> {
         let strategy = match cfg.strategy.as_ref() {
             "immediate" => FinStrategy::Immediate(StratImmediate {}),
@@ -47,6 +34,32 @@ impl FinStrategy {
             x => bail!("unsupported strategy '{}'", x),
         };
         Ok(strategy)
+    }
+
+    /// Check if finalization is allowed at this time.
+    pub(crate) fn has_green_light(
+        self,
+        identity: identity::Identity,
+    ) -> Box<Future<Item = bool, Error = Error>> {
+        match self {
+            FinStrategy::Http(h) => h.has_green_light(identity.into()),
+            FinStrategy::Immediate(i) => i.finalize(),
+            FinStrategy::Never(n) => n.has_green_light(),
+            FinStrategy::Periodic(p) => p.finalize(),
+        }
+    }
+
+    /// Check if finalization is allowed at this time.
+    pub(crate) fn report_steady(
+        self,
+        identity: identity::Identity,
+    ) -> Box<Future<Item = bool, Error = Error>> {
+        match self {
+            FinStrategy::Http(h) => h.report_steady(identity.into()),
+            FinStrategy::Immediate(i) => i.finalize(),
+            FinStrategy::Never(n) => n.report_steady(),
+            FinStrategy::Periodic(p) => p.finalize(),
+        }
     }
 
     fn try_periodic() -> Fallible<Self> {
