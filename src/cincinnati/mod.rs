@@ -1,42 +1,34 @@
-//! Asynchronous Cincinnati client/scanner.
+//! Asynchronous Cincinnati client.
 //!
-//! This module contains `CincinnatiScanner`, which is the main
+//! This module contains `CincinnatiClient`, which is the main
 //! entity interacting with the Cincinnati upstream server.
-//! It periodically tries to fetch a graph of updates, pick the
-//! greatest one available and ask rpm-ostree daemon to fetch
-//! and stage it.
+//! It periodically tries to fetch a graph of updates, picking
+//! the greatest one available.
 
-use crate::identity::Identity;
-use crate::rpm_ostree::{RpmOstreeClient, StageUpdate};
+use crate::update_agent::Identity;
 use actix::prelude::*;
 use failure::{Error, Fallible};
-use futures::future;
 use futures::prelude::*;
 use lazy_static::lazy_static;
 use reqwest::r#async as asynchro;
 use reqwest::Url;
-use std::{sync, time};
+use std::sync;
 
 /// Cincinnati graph API path endpoint (v1).
 static V1_GRAPH_PATH: &str = "v1/graph";
 
 lazy_static! {
-    pub(crate) static ref CONFIGURED: sync::RwLock<Option<CincinnatiScanner>> =
+    pub(crate) static ref CONFIGURED: sync::RwLock<Option<CincinnatiClient>> =
         sync::RwLock::default();
 }
 
-/// Configure Cincinnati scanner.
+/// Configure Cincinnati client.
 ///
-/// This overwrite the global configuration for `CincinnatiScanner`.
+/// This overwrite the global configuration for `CincinnatiClient`.
 /// It is called at least once at initialization time.
 pub(crate) fn configure(base_url: reqwest::Url, identity: Identity) -> Fallible<()> {
     let endpoint = base_url.join(V1_GRAPH_PATH)?;
-    let scanner = CincinnatiScanner {
-        endpoint,
-        fetch_interval: time::Duration::from_secs(15),
-        fetch_on_start: true,
-        identity,
-    };
+    let scanner = CincinnatiClient { endpoint, identity };
     let mut static_cfg = CONFIGURED.try_write().unwrap();
     *static_cfg = Some(scanner);
     Ok(())
@@ -44,60 +36,46 @@ pub(crate) fn configure(base_url: reqwest::Url, identity: Identity) -> Fallible<
 
 /// Main actor for interacting with Cincinnati server.
 #[derive(Clone, Debug)]
-pub struct CincinnatiScanner {
+pub struct CincinnatiClient {
     endpoint: Url,
-    fetch_interval: time::Duration,
-    fetch_on_start: bool,
     identity: Identity,
 }
 
-impl Default for CincinnatiScanner {
+impl Default for CincinnatiClient {
     fn default() -> Self {
         let cfg = CONFIGURED.try_read().expect("poisoned lock");
         cfg.clone().expect("not configured")
     }
 }
 
-impl Actor for CincinnatiScanner {
+impl Actor for CincinnatiClient {
     type Context = Context<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
-        trace!("cincinnati scanner started");
-
-        if self.fetch_on_start {
-            ctx.notify(FetchGraph {});
-        }
-
-        ctx.run_interval(self.fetch_interval, |_act, ctx| ctx.notify(FetchGraph {}));
+    fn started(&mut self, _ctx: &mut Self::Context) {
+        trace!("cincinnati client started");
     }
 }
 
-impl Supervised for CincinnatiScanner {}
-impl SystemService for CincinnatiScanner {}
+impl Supervised for CincinnatiClient {}
+impl SystemService for CincinnatiClient {}
 
-/// CincinnatiScanner request: fetch a graph of updates.
+/// CincinnatiClient request: fetch a graph of updates.
 pub(crate) struct FetchGraph {}
 
 impl Message for FetchGraph {
-    type Result = Result<(), Error>;
+    type Result = Result<Option<libcincinnati::Release>, Error>;
 }
 
-impl Handler<FetchGraph> for CincinnatiScanner {
-    type Result = Box<Future<Item = (), Error = Error>>;
+impl Handler<FetchGraph> for CincinnatiClient {
+    type Result = Box<Future<Item = Option<libcincinnati::Release>, Error = Error>>;
 
     fn handle(&mut self, _msg: FetchGraph, _ctx: &mut Self::Context) -> Self::Result {
         let endpoint = self.endpoint.clone();
         let identity = self.identity.clone();
 
-        // Ask cincinnati for an updated release.
+        // Ask remote cincinnati server for available updates.
         let next_release = fetch_cincinnati_next(endpoint, identity.into());
-        // Poke rpm-ostree to fetch and stage the update.
-        let notify_update = next_release.and_then(|next| match next {
-            Some(release) => future::Either::A(rpm_ostree_stage_update(release)),
-            None => future::Either::B(future::ok(())),
-        });
-
-        Box::new(notify_update)
+        Box::new(next_release)
     }
 }
 
@@ -112,22 +90,19 @@ pub(crate) struct HttpParams {
 
 impl From<Identity> for HttpParams {
     fn from(identity: Identity) -> Self {
+        let throttle_permille = match identity.throttle_permille {
+            Some(t) => t.to_string(),
+            // TODO(lucab): hash(node_uuid, current_version)
+            None => "666".to_string(),
+        };
         Self {
             current_version: identity.current_version,
-            stream: String::from("stable"),
-            arch: String::from("amd64"),
-            platform: String::from("metal"),
-            throttle_permille: identity.throttle_permille.unwrap_or_default().to_string(),
+            stream: identity.stream,
+            arch: identity.arch,
+            platform: identity.platform,
+            throttle_permille,
         }
     }
-}
-
-fn rpm_ostree_stage_update(
-    release: libcincinnati::Release,
-) -> impl Future<Item = (), Error = Error> {
-    let addr = System::current().registry().get::<RpmOstreeClient>();
-    let req = StageUpdate { release };
-    addr.send(req).map(|_| ()).from_err()
 }
 
 /// Fetch next available release update from Cincinnati.
@@ -184,7 +159,10 @@ fn fetch_cincinnati_next(
             Ok(ups.first().cloned())
         })
         .inspect(|release| match release {
-            Some(r) => info!("selected release '{}' for next update", r.version()),
+            Some(r) => info!(
+                "available updates found, selecting '{}' for next update",
+                r.version()
+            ),
             None => trace!("no next release"),
         })
 }

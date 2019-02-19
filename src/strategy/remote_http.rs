@@ -1,5 +1,5 @@
-use crate::config::StratHttpConfig;
-use crate::identity::Identity;
+use crate::config::StratHttpInput;
+use crate::update_agent::Identity;
 use failure::{Error, Fallible};
 use futures::future;
 use futures::prelude::*;
@@ -24,7 +24,7 @@ pub(crate) struct StratRemoteHTTP {
 
 impl StratRemoteHTTP {
     // Try to parse strategy configuration.
-    pub(crate) fn parse(cfg: StratHttpConfig) -> Fallible<Self> {
+    pub(crate) fn parse(cfg: StratHttpInput) -> Fallible<Self> {
         let base_url = if cfg.base_url.is_empty() {
             String::from(DEFAULT_REMOTE_HTTP_BASE)
         } else {

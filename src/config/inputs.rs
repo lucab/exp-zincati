@@ -1,21 +1,15 @@
-//! Runtime configuration.
-//!
-//! This module contains logic and data structures to read
-//! multiple file snippets into a single configuration structure.
-//! No input validation is done here, only config sourcing.
-//! Semantic parsing is responsibility of `RunState` instead.
-
+use crate::config::snippets;
 use failure::{Fallible, ResultExt};
 
-/// Runtime configuration holding environmental input.
+/// Runtime configuration holding environmental inputs.
 #[derive(Debug, Serialize)]
-pub(crate) struct RunConfig {
-    pub(crate) cincinnati: CincinnatiConfig,
-    pub(crate) finalize: FinalizeConfig,
-    pub(crate) identity: IdentityConfig,
+pub(crate) struct ConfigInput {
+    pub(crate) cincinnati: CincinnatiInput,
+    pub(crate) updates: UpdateConfig,
+    pub(crate) identity: IdentityInput,
 }
 
-impl RunConfig {
+impl ConfigInput {
     /// Read config snippets and merge them into a single config.
     pub(crate) fn read_config(_dirs: Vec<&str>) -> Fallible<Self> {
         use std::io::Read;
@@ -28,12 +22,13 @@ impl RunConfig {
         bufrd
             .read_to_end(&mut content)
             .context("failed to read file content")?;
-        let snippet: SingleSnippet = toml::from_slice(&content).context("failed to parse TOML")?;
+        let snippet: snippets::ConfigSnippet =
+            toml::from_slice(&content).context("failed to parse TOML")?;
 
         let snips = vec![snippet];
         let cfg = Self::merge_snippets(snips);
-        info!(
-            "TOML runtime config:\n{}",
+        debug!(
+            "Configuration input:\n{}",
             toml::to_string_pretty(&cfg).unwrap()
         );
 
@@ -41,17 +36,17 @@ impl RunConfig {
     }
 
     /// Merge multiple snippets into a single configuration.
-    fn merge_snippets(snippets: Vec<SingleSnippet>) -> Self {
+    fn merge_snippets(snippets: Vec<snippets::ConfigSnippet>) -> Self {
         let mut cincinnatis = vec![];
-        let mut finalizes = vec![];
+        let mut updates = vec![];
         let mut identities = vec![];
 
         for snip in snippets {
             if let Some(c) = snip.cincinnati {
                 cincinnatis.push(c);
             }
-            if let Some(f) = snip.finalize {
-                finalizes.push(f);
+            if let Some(f) = snip.updates {
+                updates.push(f);
             }
             if let Some(i) = snip.identity {
                 identities.push(i);
@@ -59,20 +54,20 @@ impl RunConfig {
         }
 
         Self {
-            cincinnati: CincinnatiConfig::from_snippets(cincinnatis),
-            finalize: FinalizeConfig::from_snippets(finalizes),
-            identity: IdentityConfig::from_snippets(identities),
+            cincinnati: CincinnatiInput::from_snippets(cincinnatis),
+            updates: UpdateConfig::from_snippets(updates),
+            identity: IdentityInput::from_snippets(identities),
         }
     }
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct CincinnatiConfig {
+pub(crate) struct CincinnatiInput {
     pub(crate) base_url: String,
 }
 
-impl CincinnatiConfig {
-    fn from_snippets(snippets: Vec<CincinnatiSnippet>) -> Self {
+impl CincinnatiInput {
+    fn from_snippets(snippets: Vec<snippets::CincinnatiSnippet>) -> Self {
         let mut cfg = Self {
             base_url: String::new(),
         };
@@ -87,33 +82,15 @@ impl CincinnatiConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct SingleSnippet {
-    pub(crate) agent: Option<AgentSnippet>,
-    pub(crate) cincinnati: Option<CincinnatiSnippet>,
-    pub(crate) finalize: Option<FinalizeSnippet>,
-    pub(crate) identity: Option<IdentitySnippet>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct AgentSnippet {}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct IdentitySnippet {
-    pub(crate) group: Option<String>,
-    pub(crate) node_uuid: Option<String>,
-    pub(crate) throttle_permille: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
-pub(crate) struct IdentityConfig {
+pub(crate) struct IdentityInput {
     pub(crate) group: String,
     pub(crate) node_uuid: String,
     pub(crate) throttle_permille: String,
 }
 
-impl IdentityConfig {
-    fn from_snippets(snippets: Vec<IdentitySnippet>) -> Self {
+impl IdentityInput {
+    fn from_snippets(snippets: Vec<snippets::IdentitySnippet>) -> Self {
         let mut cfg = Self {
             group: String::new(),
             node_uuid: String::new(),
@@ -136,26 +113,20 @@ impl IdentityConfig {
     }
 }
 
-/// Config snippet for Cincinnati client.
-#[derive(Debug, Deserialize)]
-pub(crate) struct CincinnatiSnippet {
-    pub(crate) base_url: Option<String>,
-}
-
 /// Config for finalizer.
 #[derive(Debug, Serialize)]
-pub(crate) struct FinalizeConfig {
+pub(crate) struct UpdateConfig {
     pub(crate) strategy: String,
     /// `remote_http` strategy config.
-    pub(crate) remote_http: StratHttpConfig,
+    pub(crate) remote_http: StratHttpInput,
     /// `periodic` strategy config.
     pub(crate) periodic: StratPeriodicConfig,
 }
 
-impl FinalizeConfig {
-    fn from_snippets(snippets: Vec<FinalizeSnippet>) -> Self {
+impl UpdateConfig {
+    fn from_snippets(snippets: Vec<snippets::UpdateSnippet>) -> Self {
         let mut strategy = String::new();
-        let mut remote_http = StratHttpConfig {
+        let mut remote_http = StratHttpInput {
             base_url: String::new(),
         };
         let periodic = StratPeriodicConfig {};
@@ -181,7 +152,7 @@ impl FinalizeConfig {
 
 /// Config snippet for `remote_http` finalizer strategy.
 #[derive(Debug, Serialize)]
-pub(crate) struct StratHttpConfig {
+pub(crate) struct StratHttpInput {
     /// Base URL for the remote semaphore manager.
     pub(crate) base_url: String,
 }
@@ -189,24 +160,3 @@ pub(crate) struct StratHttpConfig {
 /// Config snippet for `periodic` finalizer strategy.
 #[derive(Debug, Serialize)]
 pub(crate) struct StratPeriodicConfig {}
-
-/// Config snippet for finalizer.
-#[derive(Debug, Deserialize)]
-pub(crate) struct FinalizeSnippet {
-    pub(crate) strategy: Option<String>,
-    /// `remote_http` strategy config.
-    pub(crate) remote_http: Option<StratHttpSnippet>,
-    /// `periodic` strategy config.
-    pub(crate) periodic: Option<StratPeriodicSnippet>,
-}
-
-/// Config snippet for `remote_http` finalizer strategy.
-#[derive(Debug, Deserialize)]
-pub(crate) struct StratHttpSnippet {
-    /// Base URL for the remote semaphore manager.
-    pub(crate) base_url: Option<String>,
-}
-
-/// Config snippet for `periodic` finalizer strategy.
-#[derive(Debug, Deserialize)]
-pub(crate) struct StratPeriodicSnippet {}

@@ -1,4 +1,4 @@
-use crate::config::IdentityConfig;
+use crate::config::IdentityInput;
 use failure::{Fallible, ResultExt};
 use uuid::Uuid;
 
@@ -18,7 +18,7 @@ pub(crate) struct Identity {
 }
 
 impl Identity {
-    pub(crate) fn try_from_config(cfg: IdentityConfig) -> Fallible<Self> {
+    pub(crate) fn try_from_config(cfg: IdentityInput) -> Fallible<Self> {
         let group = if cfg.group.is_empty() {
             String::from(DEFAULT_GROUP)
         } else {
@@ -35,7 +35,11 @@ impl Identity {
         let arch = String::from("amd64");
         let stream = String::from("stable");
         let platform = String::from("metal-bios");
-        let throttle_permille = None;
+        let throttle_permille = if cfg.throttle_permille.is_empty() {
+            None
+        } else {
+            Some(cfg.throttle_permille.parse()?)
+        };
 
         let current_version = read_os_release().context("failed to get current os-release")?;
         let identity = Self {

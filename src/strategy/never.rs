@@ -7,7 +7,7 @@ pub(crate) struct StratNever {}
 
 impl StratNever {
     pub(crate) fn has_green_light(self) -> Box<Future<Item = bool, Error = Error>> {
-        trace!("finalizer check, strategy 'never'");
+        trace!("green_light check, strategy 'never'");
 
         let never = future::ok(false);
         Box::new(never)
