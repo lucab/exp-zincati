@@ -34,11 +34,11 @@ pub(crate) struct StageDeployment {
 }
 
 impl Message for StageDeployment {
-    type Result = Fallible<libcincinnati::Release>;
+    type Result = Fallible<(libcincinnati::Release, String)>;
 }
 
 impl Handler<StageDeployment> for DbusClient {
-    type Result = Fallible<libcincinnati::Release>;
+    type Result = Fallible<(libcincinnati::Release, String)>;
 
     fn handle(&mut self, msg: StageDeployment, _ctx: &mut Self::Context) -> Self::Result {
         // TODO(lucab): implement real call to rpm-ostree.
@@ -65,7 +65,7 @@ impl Handler<StageDeployment> for DbusClient {
         }
 
         warn!("rpm-ostree stage: stubbed");
-        Ok(msg.release)
+        Ok((msg.release, "fake_txn_addr".to_string()))
     }
 }
 

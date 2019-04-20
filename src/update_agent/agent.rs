@@ -32,10 +32,14 @@ pub(crate) enum UpdateAgentState {
     Initialization,
     /// Actor is checking and waiting for updates.
     Steady,
-    /// Update found and staged.
+    /// Update found.
+    UpdateFound(libcincinnati::Release),
+    /// Update transaction in progress.
+    UpdateInProgress(libcincinnati::Release),
+    /// Update staged.
     UpdateStaged(libcincinnati::Release),
-    /// Update finalized.
-    UpdateFinalized(libcincinnati::Release),
+    /// Finalizing transaction in progress.
+    UpdateFinalizing(libcincinnati::Release),
 }
 
 impl Default for UpdateAgent {
@@ -75,9 +79,11 @@ impl Handler<RefreshTick> for UpdateAgent {
         match self.state {
             UpdateAgentState::StartState => self.try_initialize(msg),
             UpdateAgentState::Initialization => self.try_steady(msg),
-            UpdateAgentState::Steady => self.try_stage_update(msg),
-            UpdateAgentState::UpdateStaged(ref r) => self.try_finalize_update(msg, r.clone()),
-            UpdateAgentState::UpdateFinalized(_) => Box::new(actix::fut::ok(())),
+            UpdateAgentState::Steady => self.check_for_update(msg),
+            UpdateAgentState::UpdateFound(ref r) => self.try_update_deployment(msg, r.clone()),
+            UpdateAgentState::UpdateInProgress(ref r) => self.check_update_success(msg, r.clone()),
+            UpdateAgentState::UpdateStaged(ref r) => self.try_finalizing(msg, r.clone()),
+            UpdateAgentState::UpdateFinalizing(_) => Box::new(actix::fut::ok(())),
         }
     }
 }
@@ -109,25 +115,62 @@ impl UpdateAgent {
         Box::new(steady_state)
     }
 
-    /// Check for any available update and try to stage it.
-    fn try_stage_update(&mut self, _msg: RefreshTick) -> ResponseActFuture<Self, (), Error> {
-        let stage_update = cincinnati_check_update().and_then(|next| match next {
-            Some(release) => future::Either::A(rpm_ostree_stage(release)),
-            None => future::Either::B(future::ok(None)),
-        });
+    /// Check for any available update via Cincinnati.
+    fn check_for_update(&mut self, _msg: RefreshTick) -> ResponseActFuture<Self, (), Error> {
+        let check_update = cincinnati_check_update();
 
         let staged =
-            actix::fut::wrap_future::<_, Self>(stage_update).map(|release, actor, _ctx| {
+            actix::fut::wrap_future::<_, Self>(check_update).map(|release, actor, _ctx| {
                 if let Some(r) = release {
-                    actor.state = UpdateAgentState::UpdateStaged(r);
+                    actor.state = UpdateAgentState::UpdateFound(r);
                 }
             });
 
         Box::new(staged)
     }
 
+    /// Start deploying an update.
+    fn try_update_deployment(
+        &mut self,
+        _msg: RefreshTick,
+        release: libcincinnati::Release,
+    ) -> ResponseActFuture<Self, (), Error> {
+        // Start updating.
+        let update = rpm_ostree_start_update(release);
+
+        // Progress to next state.
+        let updating = actix::fut::wrap_future::<_, Self>(update).map(|release, actor, _ctx| {
+            if let Some(r) = release {
+                actor.state = UpdateAgentState::UpdateInProgress(r);
+            }
+            // else { self.check_for_update(_msg) }
+        });
+
+        Box::new(updating)
+    }
+
+    /// Start deploying an update.
+    fn check_update_success(
+        &mut self,
+        _msg: RefreshTick,
+        release: libcincinnati::Release,
+    ) -> ResponseActFuture<Self, (), Error> {
+        // Start updating.
+        let update = rpm_ostree_check_update(release);
+
+        // Progress to next state.
+        let updating = actix::fut::wrap_future::<_, Self>(update).map(|release, actor, _ctx| {
+            if let Some(r) = release {
+                actor.state = UpdateAgentState::UpdateInProgress(r);
+            }
+            // else { self.check_for_update(_msg) }
+        });
+
+        Box::new(updating)
+    }
+
     /// Check for finalization green-flag and try to finalize the update.
-    fn try_finalize_update(
+    fn try_finalizing(
         &mut self,
         _msg: RefreshTick,
         release: libcincinnati::Release,
@@ -149,7 +192,7 @@ impl UpdateAgent {
         // Progress to next state.
         let finalized = actix::fut::wrap_future::<_, Self>(finalize).map(|release, actor, _ctx| {
             if let Some(r) = release {
-                actor.state = UpdateAgentState::UpdateFinalized(r);
+                actor.state = UpdateAgentState::UpdateFinalizing(r);
             }
             // else { self.try_stage_update(_msg) }
         });
@@ -158,13 +201,23 @@ impl UpdateAgent {
     }
 }
 
-fn rpm_ostree_stage(
+fn rpm_ostree_start_update(
     release: libcincinnati::Release,
 ) -> impl Future<Item = Option<libcincinnati::Release>, Error = Error> {
     let addr = System::current()
         .registry()
         .get::<rpm_ostree::RpmOstreeClient>();
     let req = rpm_ostree::StageUpdate { release };
+    addr.send(req).flatten().from_err()
+}
+
+fn rpm_ostree_check_update(
+    release: libcincinnati::Release,
+) -> impl Future<Item = Option<libcincinnati::Release>, Error = Error> {
+    let addr = System::current()
+        .registry()
+        .get::<rpm_ostree::RpmOstreeClient>();
+    let req = rpm_ostree::CheckUpdateTxn { release };
     addr.send(req).flatten().from_err()
 }
 

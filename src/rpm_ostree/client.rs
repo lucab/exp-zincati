@@ -79,7 +79,7 @@ impl Handler<FinalizeUpdate> for RpmOstreeClient {
 fn stage_update(
     addr: Addr<DbusClient>,
     release: libcincinnati::Release,
-) -> impl Future<Item = Option<libcincinnati::Release>, Error = Error> {
+) -> impl Future<Item = Option<(libcincinnati::Release, String)>, Error = Error> {
     debug!(
         "rpm-ostree, requesting to stage update '{}'",
         release.version()
@@ -93,8 +93,8 @@ fn stage_update(
             addr.send(req).from_err()
         })
         .flatten()
-        .inspect(|release| info!("rpm-ostree, staged update '{}'", release.version()))
-        .map(|release| (Some(release)))
+        .inspect(|(release, _)| info!("rpm-ostree, staged update '{}'", release.version()))
+        .map(|x| (Some(x)))
 }
 
 fn finalize_update(
